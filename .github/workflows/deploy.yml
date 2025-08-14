@@ -31,7 +31,7 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: npx supabase db push --project-ref iydqlagqgtzuremwybap
+        run: npx supabase db push --db-url "postgresql://postgres:${{ secrets.SUPABASE_DB_PASSWORD }}@db.iydqlagqgtzuremwybap.supabase.co:5432/postgres"
 
       - name: Build Frontend
         run: npm run build
