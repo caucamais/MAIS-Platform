@@ -1,87 +1,85 @@
+-- MAIS Political Command Center - Seed Data
+-- Swiss Precision Standards - Consistent Development Environment
 
--- supabase/seed.sql
--- Este script puebla la base de datos con datos iniciales y de prueba.
+-- Disable Row Level Security to insert data
+ALTER TABLE public.roles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages DISABLE ROW LEVEL SECURITY;
 
--- 1. Desactivar Row Level Security (RLS) para poder insertar datos
--- Es crucial reactivarlo al final.
-ALTER TABLE territories DISABLE ROW LEVEL SECURITY;
-ALTER TABLE roles DISABLE ROW LEVEL SECURITY;
-ALTER TABLE user_roles DISABLE ROW LEVEL SECURITY;
-
-
--- 2. Insertar los Territorios Jerárquicos
--- Primero, el nivel más alto (Departamento/Región)
-INSERT INTO public.territories (name, type) VALUES ('Cauca', 'DEPARTAMENTO') ON CONFLICT (name) DO NOTHING;
-
--- Luego, los municipios, vinculados al departamento del Cauca
--- ON CONFLICT (name) DO NOTHING evita duplicados si el script se ejecuta varias veces.
-INSERT INTO public.territories (name, type, parent_id)
-SELECT
-    'Popayán',
-    'MUNICIPIO',
-    (SELECT id from public.territories WHERE name = 'Cauca')
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO public.territories (name, type, parent_id)
-SELECT
-    'Santander de Quilichao',
-    'MUNICIPIO',
-    (SELECT id from public.territories WHERE name = 'Cauca')
-ON CONFLICT (name) DO NOTHING;
-
-INSERT INTO public.territories (name, type, parent_id)
-SELECT
-    'Inzá',
-    'MUNICIPIO',
-    (SELECT id from public.territories WHERE name = 'Cauca')
-ON CONFLICT (name) DO NOTHING;
--- ... añadir aquí el resto de municipios del Cauca ...
-
-
--- 3. Insertar los Roles Organizacionales y Políticos
+-- 1. Seed Roles
+-- These should match the roles defined in the migration.
 INSERT INTO public.roles (name) VALUES
-    ('Coordinador Regional'),
-    ('Diputado'),
-    ('Coordinador Zonal'),
-    ('Lider Municipal'),
-    ('Alcalde'),
-    ('Concejal')
+  ('comite_ejecutivo_nacional'),
+  ('lider_regional'),
+  ('comite_departamental'),
+  ('candidato'),
+  ('influenciador_digital'),
+  ('lider_comunitario'),
+  ('votante_simpatizante')
 ON CONFLICT (name) DO NOTHING;
 
+-- 2. Create Test Users in Supabase Auth
+-- Use a secure, common password for all test users. 
+-- IMPORTANT: Replace with your actual project ref and a secure JWT secret in a real scenario.
+-- This is a simplified example for local development.
 
--- 4. Insertar Usuarios de Ejemplo y Asignarles Roles
--- IMPORTANTE: La creación de usuarios en `auth.users` no se puede hacer directamente con SQL.
--- PASO 1: Crea los usuarios manualmente en el panel de Supabase > Authentication.
--- PASO 2: Obtén el `ID` de cada usuario creado y pégalo en este script.
+-- Create a temporary function to create users
+CREATE OR REPLACE FUNCTION create_test_user(email TEXT, password TEXT) RETURNS uuid AS $$
+DECLARE
+  user_id uuid;
+BEGIN
+  user_id := extensions.uuid_generate_v4();
+  INSERT INTO auth.users (id, aud, role, email, encrypted_password, email_confirmed_at, instance_id)
+  VALUES (user_id, 'authenticated', 'authenticated', email, crypt(password, gen_salt('bf')), now(), '00000000-0000-0000-0000-000000000000');
+  RETURN user_id;
+END;
+$$ LANGUAGE plpgsql;
 
--- Ejemplo para un Coordinador Regional del Cauca
--- Reemplaza 'UUID_DEL_COORDINADOR_REGIONAL' con el ID real del usuario.
-INSERT INTO public.user_roles (user_id, role_id, territory_id)
-SELECT
-    'a1b2c3d4-e5f6-7890-1234-567890abcdef', -- REEMPLAZAR CON UUID REAL
-    (SELECT id FROM public.roles WHERE name = 'Coordinador Regional'),
-    (SELECT id FROM public.territories WHERE name = 'Cauca');
+-- Create the users and store their IDs
+DO $$
+DECLARE 
+  cen_user_id uuid;
+  lr_user_id uuid;
+  cd_user_id uuid;
+  cand_user_id uuid;
+  cen_role_id uuid;
+  lr_role_id uuid;
+  cd_role_id uuid;
+  cand_role_id uuid;
+BEGIN
+  -- Get Role IDs
+  SELECT id INTO cen_role_id FROM public.roles WHERE name = 'comite_ejecutivo_nacional';
+  SELECT id INTO lr_role_id FROM public.roles WHERE name = 'lider_regional';
+  SELECT id INTO cd_role_id FROM public.roles WHERE name = 'comite_departamental';
+  SELECT id INTO cand_role_id FROM public.roles WHERE name = 'candidato';
 
--- Ejemplo para un Diputado del Cauca
--- Reemplaza 'UUID_DEL_DIPUTADO' con el ID real del usuario.
-INSERT INTO public.user_roles (user_id, role_id, territory_id)
-SELECT
-    'b2c3d4e5-f6a7-8901-2345-67890abcdef1', -- REEMPLAZAR CON UUID REAL
-    (SELECT id FROM public.roles WHERE name = 'Diputado'),
-    (SELECT id FROM public.territories WHERE name = 'Cauca');
+  -- Create users and get their IDs
+  cen_user_id := create_test_user('nacional@mais.com', 'password123');
+  lr_user_id := create_test_user('regional@mais.com', 'password123');
+  cd_user_id := create_test_user('departamental@mais.com', 'password123');
+  cand_user_id := create_test_user('candidato@mais.com', 'password123');
 
--- Ejemplo para un Líder Municipal de Popayán
--- Reemplaza 'UUID_DEL_LIDER_MUNICIPAL' con el ID real del usuario.
-INSERT INTO public.user_roles (user_id, role_id, territory_id)
-SELECT
-    'c3d4e5f6-a7b8-9012-3456-7890abcdef12', -- REEMPLAZAR CON UUID REAL
-    (SELECT id FROM public.roles WHERE name = 'Lider Municipal'),
-    (SELECT id FROM public.territories WHERE name = 'Popayán');
+  -- 3. Seed User Profiles
+  INSERT INTO public.user_profiles (id, full_name, email, role_id, territory_zone, is_password_changed)
+  VALUES
+    (cen_user_id, 'Presidente Nacional', 'nacional@mais.com', cen_role_id, 'zona_norte', false),
+    (lr_user_id, 'Líder Regional Sur', 'regional@mais.com', lr_role_id, 'zona_sur', false),
+    (cd_user_id, 'Comité Departamental Centro', 'departamental@mais.com', cd_role_id, 'zona_centro', false),
+    (cand_user_id, 'Candidato Oriente', 'candidato@mais.com', cand_role_id, 'zona_oriente', false)
+  ON CONFLICT (id) DO NOTHING;
 
+  -- 4. Seed Messages
+  INSERT INTO public.messages (sender_id, sender_name, sender_role_id, content, is_urgent, is_confidential)
+  VALUES
+    (cen_user_id, 'Presidente Nacional', cen_role_id, 'Reunión nacional de estrategia este viernes. Asistencia obligatoria.', true, true),
+    (lr_user_id, 'Líder Regional Sur', lr_role_id, 'Necesitamos movilizar a los votantes en la zona sur para el próximo evento.', false, false);
 
--- 5. Reactivar Row Level Security (RLS)
--- ¡Este es el paso más importante para la seguridad!
-ALTER TABLE territories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE roles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_roles ENABLE ROW LEVEL SECURITY;
+END $$;
 
+-- Clean up the temporary function
+DROP FUNCTION create_test_user(TEXT, TEXT);
+
+-- Re-enable Row Level Security
+ALTER TABLE public.roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;

@@ -26,6 +26,7 @@
 
 -- Enable necessary extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS moddatetime WITH SCHEMA extensions;
 
 -- User Profiles Table
 CREATE TABLE IF NOT EXISTS user_profiles (

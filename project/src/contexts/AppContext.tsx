@@ -1,21 +1,17 @@
 // MAIS Political Command Center - Application Context
 // Swiss Precision Standards - Centralized State Management
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { supabase, signIn, signOut, updateUserPassword, getUserProfile, updateUserProfile, getAllUsers, sendMessage as sendMessageAPI, getMessages, markMessageAsRead as markMessageAsReadAPI, getCampaignFinances, subscribeToMessages, subscribeToUserUpdates, hasPermissionForTerritory } from '../lib/supabase';
+import React, { useEffect, useState, useCallback } from 'react';
+import { supabase } from '../core/lib/supabase';
+import { authService } from '../auth/services/authService';
+import { userService } from '../users/services/userService';
+import { messageService } from '../messages/services/messageService';
+import { financeService } from '../finances/services/financeService';
 import { TERRITORY_CONFIG, ROLE_HIERARCHY } from '../types';
 import type { AppContextType, User, Message, CampaignFinance, Territory, PoliticalRole, TerritoryZone } from '../types';
 import toast from 'react-hot-toast';
 
-const AppContext = createContext<AppContextType | undefined>(undefined);
-
-export const useApp = () => {
-  const context = useContext(AppContext);
-  if (context === undefined) {
-    throw new Error('useApp must be used within an AppProvider');
-  }
-  return context;
-};
+import { AppContext } from './appContextUtils';
 
 interface AppProviderProps {
   children: React.ReactNode;
@@ -48,72 +44,36 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize app and check authentication
-  useEffect(() => {
-    const initializeApp = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (session?.user) {
-          const profile = await getUserProfile(session.user.id);
-          if (profile) {
-            setUser(profile);
-            await loadAppData(profile);
-          }
-        }
-      } catch (err) {
-        console.error('App initialization error:', err);
-        setError('Error initializing application');
-      } finally {
-        setLoading(false);
-      }
-    };
+  const hasPermission = useCallback((currentUser: User, requiredRole: PoliticalRole, targetZone?: TerritoryZone): boolean => {
+    const userLevel = ROLE_HIERARCHY[currentUser.role];
+    const requiredLevel = ROLE_HIERARCHY[requiredRole];
+    
+    if (userLevel < requiredLevel) return false;
 
-    initializeApp();
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        const profile = await getUserProfile(session.user.id);
-        if (profile) {
-          setUser(profile);
-          await loadAppData(profile);
-        }
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setUsers([]);
-        setMessages([]);
-        setFinances([]);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    if (targetZone) {
+        if (currentUser.role === 'comite_ejecutivo_nacional') return true;
+        return currentUser.territory_zone === targetZone;
+    }
+    
+    return true;
   }, []);
 
-  // Load application data based on user permissions
-  const loadAppData = async (currentUser: User) => {
+  const loadAppData = useCallback(async (currentUser: User) => {
     try {
       setLoading(true);
       
-      // Load users
-      const allUsers = await getAllUsers();
+      const allUsers = await userService.getAllUsers();
       setUsers(allUsers);
       
-      // Load messages based on user role and territory
-      const userMessages = await getMessages(currentUser.role, currentUser.territory_zone);
+      const userMessages = await messageService.getMessages(currentUser.role, currentUser.territory_zone);
       setMessages(userMessages);
       
-      // Load finances based on user role and territory
-      const userFinances = await getCampaignFinances(currentUser.role, currentUser.territory_zone);
+      const userFinances = await financeService.getCampaignFinances(currentUser.role, currentUser.territory_zone);
       setFinances(userFinances);
       
-      // Set up real-time subscriptions
-      const messageSubscription = subscribeToMessages((newMessage) => {
-        // Only add message if user has permission to see it
-        if (hasPermission(currentUser.role, newMessage.territory_zone)) {
+      const messageSubscription = messageService.subscribeToMessages((newMessage) => {
+        if (hasPermission(currentUser, 'votante_simpatizante', newMessage.territory_zone)) {
           setMessages(prev => [newMessage, ...prev]);
-          
-          // Show toast notification for urgent messages
           if (newMessage.is_urgent && newMessage.sender_id !== currentUser.id) {
             toast.error(`Mensaje urgente de ${newMessage.sender_name}`, {
               duration: 5000,
@@ -122,7 +82,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         }
       });
       
-      const userSubscription = subscribeToUserUpdates((updatedUser) => {
+      const userSubscription = userService.subscribeToUserUpdates((updatedUser) => {
         setUsers(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
         if (updatedUser.id === currentUser.id) {
           setUser(updatedUser);
@@ -140,22 +100,59 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [setUsers, setMessages, setFinances, hasPermission]);
 
-  // Authentication functions
+  useEffect(() => {
+    const initializeApp = async () => {
+      try {
+        const session = await authService.getSession();
+        if (session?.user) {
+          const profile = await userService.getUserProfile(session.user.id);
+          if (profile) {
+            setUser(profile);
+            await loadAppData(profile);
+          }
+        }
+      } catch (err) {
+        console.error('App initialization error:', err);
+        setError('Error initializing application');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializeApp();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        const profile = await userService.getUserProfile(session.user.id);
+        if (profile) {
+          setUser(profile);
+          await loadAppData(profile);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setUsers([]);
+        setMessages([]);
+        setFinances([]);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [loadAppData]);
+
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     try {
       setLoading(true);
       setError(null);
       
-      const { user: authUser, error: authError } = await signIn(email, password);
-      
-      if (authError || !authUser) {
+      const { user: authUser } = await authService.signIn(email, password);
+      if (!authUser) {
         setError('Credenciales inválidas');
         return false;
       }
       
-      const profile = await getUserProfile(authUser.id);
+      const profile = await userService.getUserProfile(authUser.id);
       if (!profile) {
         setError('Perfil de usuario no encontrado');
         return false;
@@ -164,8 +161,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       setUser(profile);
       await loadAppData(profile);
       
-      // Update last login
-      await updateUserProfile(authUser.id, { last_login: new Date().toISOString() });
+      await userService.updateUserProfile(authUser.id, { last_login: new Date().toISOString() });
       
       toast.success(`Bienvenido, ${profile.full_name}`);
       return true;
@@ -177,12 +173,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadAppData]);
 
   const logout = useCallback(async (): Promise<void> => {
     try {
       setLoading(true);
-      await signOut();
+      await authService.signOut();
       setUser(null);
       setUsers([]);
       setMessages([]);
@@ -196,20 +192,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }
   }, []);
 
-  // Profile management
   const updatePassword = useCallback(async (newPassword: string): Promise<boolean> => {
     try {
       setLoading(true);
-      const { error } = await updateUserPassword(newPassword);
-      
-      if (error) {
-        setError('Error al actualizar contraseña');
-        return false;
-      }
-      
+      await authService.updateUserPassword(newPassword);
       toast.success('Contraseña actualizada correctamente');
       return true;
-      
     } catch (err) {
       console.error('Update password error:', err);
       setError('Error al actualizar contraseña');
@@ -224,17 +212,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     
     try {
       setLoading(true);
-      const { error } = await updateUserProfile(user.id, data);
-      
-      if (error) {
-        setError('Error al actualizar perfil');
-        return false;
-      }
-      
+      await userService.updateUserProfile(user.id, data);
       setUser(prev => prev ? { ...prev, ...data } : null);
       toast.success('Perfil actualizado correctamente');
       return true;
-      
     } catch (err) {
       console.error('Update profile error:', err);
       setError('Error al actualizar perfil');
@@ -244,19 +225,11 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }
   }, [user]);
 
-  // Messaging functions
   const sendMessage = useCallback(async (messageData: Omit<Message, 'id' | 'created_at' | 'read_by'>): Promise<boolean> => {
     try {
-      const { error } = await sendMessageAPI(messageData);
-      
-      if (error) {
-        setError('Error al enviar mensaje');
-        return false;
-      }
-      
+      await messageService.sendMessage(messageData);
       toast.success('Mensaje enviado correctamente');
       return true;
-      
     } catch (err) {
       console.error('Send message error:', err);
       setError('Error al enviar mensaje');
@@ -268,7 +241,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     if (!user) return;
     
     try {
-      await markMessageAsReadAPI(messageId, user.id);
+      await messageService.markMessageAsRead(messageId, user.id);
       setMessages(prev => 
         prev.map(msg => 
           msg.id === messageId 
@@ -281,7 +254,6 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }
   }, [user]);
 
-  // Utility functions
   const getUsersByTerritory = useCallback((zone: TerritoryZone): User[] => {
     return users.filter(u => u.territory_zone === zone);
   }, [users]);
@@ -290,22 +262,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     return finances.filter(f => f.territory_zone === zone);
   }, [finances]);
 
-  const hasPermission = useCallback((requiredRole: PoliticalRole, targetZone?: TerritoryZone): boolean => {
-    if (!user) return false;
-    
-    const userLevel = ROLE_HIERARCHY[user.role];
-    const requiredLevel = ROLE_HIERARCHY[requiredRole];
-    
-    // Check role hierarchy
-    if (userLevel < requiredLevel) return false;
-    
-    // Check territory access
-    if (targetZone && !hasPermissionForTerritory(user.role, user.territory_zone, targetZone)) {
-      return false;
-    }
-    
-    return true;
-  }, [user]);
+  const permissionCallback = useCallback((requiredRole: PoliticalRole, targetZone?: TerritoryZone): boolean => {
+      if (!user) return false;
+      return hasPermission(user, requiredRole, targetZone);
+  }, [user, hasPermission]);
 
   const contextValue: AppContextType = {
     user,
@@ -323,7 +283,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     markMessageAsRead,
     getUsersByTerritory,
     getFinancesByTerritory,
-    hasPermission,
+    hasPermission: permissionCallback,
   };
 
   return (
